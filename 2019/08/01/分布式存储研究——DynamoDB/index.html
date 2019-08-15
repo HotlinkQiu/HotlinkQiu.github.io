@@ -103,7 +103,7 @@
 <meta property="og:description" content="这篇博客，分享另一个云端巨头：Amazon的DynamoDB数据库的实现论文，“Dynamo: Amazon’s Highly Available Key-value Store”。这也是整个专题的第三篇。">
 <meta property="og:locale" content="zh-CN">
 <meta property="og:image" content="https://hotlinkqiu-blog.oss-cn-shenzhen.aliyuncs.com/dynamo/dynamo_techniques.PNG">
-<meta property="og:updated_time" content="2019-08-08T12:53:46.928Z">
+<meta property="og:updated_time" content="2019-08-13T00:33:25.660Z">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="分布式存储研究——DynamoDB">
 <meta name="twitter:description" content="这篇博客，分享另一个云端巨头：Amazon的DynamoDB数据库的实现论文，“Dynamo: Amazon’s Highly Available Key-value Store”。这也是整个专题的第三篇。">
@@ -382,7 +382,7 @@
                 
                   <span class="post-meta-item-text">更新于</span>
                 
-                <time title="修改时间：2019-08-08 20:53:46" itemprop="dateModified" datetime="2019-08-08T20:53:46+08:00">2019-08-08</time>
+                <time title="修改时间：2019-08-13 08:33:25" itemprop="dateModified" datetime="2019-08-13T08:33:25+08:00">2019-08-13</time>
               </span>
             
           
@@ -474,7 +474,35 @@
 <li>当一个节点恢复可用，或加入到系统中时，各个其他可用节点可以分担数据迁移的压力。</li>
 <li>一个节点具体负责的虚拟节点数量可以根据其容量，性能动态调整，可以感受到硬件节点的异质性。</li>
 </ul>
-
+<h2 id="Replication"><a href="#Replication" class="headerlink" title="Replication"></a>Replication</h2><p>为了保障数据的高可用性，每条数据都会保留N个副本。当一个数据被分配到一个节点上时，这个节点还会负责将这份数据放到它的前N-1个虚拟节点上。</p>
+<p>负责保存同一份数据的节点列表被称为一个“preference list”，为了保障节点故障时数据仍可用，preference list数量通常会多于N。另外，由于使用了虚拟节点的概念，几个虚拟节点可能处在同一个物理节点上，为了解决这一问题，preference list会在环中跳跃式分配，保证整个列表包含不同的物理节点。</p>
+<blockquote>
+<p>此处的跳跃分配方式也不是很清楚。有待后续补充。</p>
+</blockquote>
+<h2 id="Data-Versioning"><a href="#Data-Versioning" class="headerlink" title="Data Versioning"></a>Data Versioning</h2><p>Dynamo保障数据的最终一致性，也就意味着对同一份数据的多个副本传播修改可以是异步的，通常不需要等待所有分片都写完即可向用户返回结果。造成的问题之前也提到过，在一些特定的错误场景，如网络分区波动或服务器宕机等情况下，改动可能无法传递到所有分片。</p>
+<p>在亚马逊平台中，有不少应用其实是可以容忍这种错误的，例如添加购物车场景，当用户添加时，请求不会被拒绝，如果此时最新版本的购物车数据不可达，那么就将数据保存在老一些版本的数据中，这两份不同版本的数据会在获取时进行融合。当然，此时会出现的另一个问题是，融合过程中被删除的item可能重新出现在列表中。这个过程要求设计的应用程序能感知并处理修改冲突。</p>
+<p>Dynamo使用向量钟（vector clocks）来确定不同版本之间的先后关系。那么此时各个副本中不仅保留了各自的数据，还会保留该数据的多个版本。保留的版本数量有限（如10个），当感知到其他分片上的修改时，判断自己分片上的版本全部低于该修改的最新版本，那么自己分片的内容就会被覆盖。否则，则仍会保留多个版本，待读取时进行冲突解决。</p>
+<h2 id="Execution-of-get-and-put-Operations"><a href="#Execution-of-get-and-put-Operations" class="headerlink" title="Execution of get() and put() Operations"></a>Execution of get() and put() Operations</h2><p>get和put操作有两种方式来找到对应需要操作的节点：</p>
+<ul>
+<li>将请求发送到一个通用的负载均衡器，由它来根据内容进行路由。这种方法应用不需要自己维护连接Dynamo的代码。</li>
+<li>使用一个可以感知分区的client库来将自己的请求路由到对应的节点。这种方法延迟更低，因为少了一层转发（见后续描述）。</li>
+</ul>
+<p>通常接受get和put操作的是preference list中的第一个节点（如果是通过负载均衡的请求，可能会路由到list中任意一个节点，此时请求会再被转发到第一个节点）。写和读操作涉及N个节点，和很多仲裁系统（quorum system）一样，需要保证 R + W &gt; N。R即读请求时需要收到的分片响应数量，相应的，W即写请求时需要收到的分片回复数量（包含本身处理请求的节点本地读写）。在这种模型中，请求的延迟取决于最慢的R个读或W个写节点。也因此，R和W可以取得尽可能小。</p>
+<h2 id="Handling-Failures-Hinted-Handoff"><a href="#Handling-Failures-Hinted-Handoff" class="headerlink" title="Handling Failures: Hinted Handoff"></a>Handling Failures: Hinted Handoff</h2><p>Dynamo实际上不需要系统保障所有的quorum节点可用。它使用一种“sloppy quorum”的策略。简单来说，一份数据储存在ABC三个节点中。当A节点宕机或不可达时，就临时储存在D节点中。D节点单独有一块区域存储这些本不属于自己的数据，并进行定时轮询。如果发现A节点可用，就将数据传输回去并删掉本地的副本。始终保持三个节点的数据副本。（注意此处选择D不是任意的，应该是在环中最近一个健康节点，这样才能保证故障时读写数据能找到该节点）。</p>
+<p>与此同时，Amazon为了保障Dynamo的高可用性，还会将数据存储节点分布在多个数据中心中，数据中心间通过高速通道连接，避免自然灾害等导致一个数据中心同时宕机的风险。当然这样的部署对于小型机构来说是基本不可能的，仍需要依赖于Amazon平台的基础设施。</p>
+<h2 id="Handling-Permanet-Failures-Replica-Synchronization"><a href="#Handling-Permanet-Failures-Replica-Synchronization" class="headerlink" title="Handling Permanet Failures: Replica Synchronization"></a>Handling Permanet Failures: Replica Synchronization</h2><p>Dynamo使用Merkle tree来进行节点同步，以尽量减少同步时需要传输的数据。Merkle tree是一棵hash树，简单来说，每个节点就是一个单独key的value的hash值，而父节点又是其子节点的hash值。那么在比较两个节点是否不一致时，只需要比较最顶层节点，然后根据比较结果依次向下比较，直到同步所有的不一致叶子节点。而不需要将所有数据拿出来进行比较。每个物理节点会对其上每一个虚拟节点维护一棵单独的Merkle tree。</p>
+<p>这个方案的缺点是当有节点加入或离开时，需要重新计算整棵树的hash值。该问题后续有解决方案。</p>
+<blockquote>
+<p>仍然要弄清楚，Hinted Handoff和Replica Synchronization两者的适用场景有什么不同及联系：相较而言，Hinted Handoff适用于节点临时不可用的场景，节点还是会回到集群中来，这一过程几乎是透明的。而Replica Synchronization则适用于节点永久不可用，需要进行数据同步。</p>
+</blockquote>
+<h2 id="Membership-and-Failure-Detection"><a href="#Membership-and-Failure-Detection" class="headerlink" title="Membership and Failure Detection"></a>Membership and Failure Detection</h2><ul>
+<li>Ring Membership：<br>管理员可以通过控制台或浏览器去连接一个Dynamo节点，并发出添加或删除一个节点的指令。处理该指令的节点会将指令写入持久存储的节点改动历史中，一个基于Gossip的协议将改动传播到各个节点，并最终维持各个节点上信息一致：每个节点每秒都会选择一个随机节点，这两个节点之间协商永久存储的节点改动历史。通过协商，每个节点都能更新自己需要负责存储的区域数据。</li>
+<li>External Discovery：<br>在之前介绍的动态添加删除的节点过程中，可能出现逻辑分区，如A，B同时添加进环，它们都认为自己是环中的一员，但还不能立即感知到对方。此时会有一个由外部机制（静态文件定义，或者外部的配置服务）决定的种子节点，所有其他节点会和种子节点交流自己的membership，使得逻辑分区基本不可能出现。</li>
+<li>Failure Detection：<br>当节点A发现节点B不响应其请求时，就会认为节点B失效了，从而将请求发送到可选的其他节点中去，实施Hinted Handoff。同时A节点会不断轮询B，来查看其是否已经恢复。而去中心化的节点失效探查协议使用了简单的类似gossip的协议。这适用于节点的临时失效。而对于明确的节点增加和删除，则不在此协商范围内。</li>
+</ul>
+<h2 id="Adding-Removing-Storage-Nodes"><a href="#Adding-Removing-Storage-Nodes" class="headerlink" title="Adding/Removing Storage Nodes"></a>Adding/Removing Storage Nodes</h2><p>当一个节点被加入到环中时，它就会被随机分配到一系列的token，表示它所承担的存储的key。此时有一批节点就不再需要储存这些key的信息，从而将这些数据传输到新增节点上来。而当节点退出系统时，会实施一个逆过程，将退出节点上的数据重新传输到新计算负责的节点上去。</p>
+<p>Dyanmo的实际操作经验表明，这种方法将负载均匀地平摊到各个节点，从而降低延迟，提高效率。另外，通过在起始和目标节点之间加入一个确认回路，可以保证不会收到重复的数据传输。</p>
+<h1 id="Implementation"><a href="#Implementation" class="headerlink" title="Implementation"></a>Implementation</h1>
       
     </div>
 
@@ -528,6 +556,10 @@
           <span class="post-nav-divider"></span>
 
           <div class="post-nav-prev post-nav-item">
+            
+              <a href="/2019/08/15/分布式存储研究——Aurora/" rel="prev" title="分布式存储研究——Aurora">
+                分布式存储研究——Aurora <i class="fa fa-chevron-right"></i>
+              </a>
             
           </div>
         </div>
@@ -598,7 +630,7 @@
                 
                   <a href="/archives/">
                 
-                    <span class="site-state-item-count">5</span>
+                    <span class="site-state-item-count">7</span>
                     <span class="site-state-item-name">日志</span>
                   </a>
                 </div>
@@ -654,7 +686,9 @@
                     
                       
                     
-                    <span class="site-state-item-count">9</span>
+                      
+                    
+                    <span class="site-state-item-count">10</span>
                     <span class="site-state-item-name">标签</span>
                   </a>
                 </div>
@@ -692,7 +726,7 @@
             
 
             
-              <div class="post-toc-content"><ol class="nav"><li class="nav-item nav-level-1"><a class="nav-link" href="#Background"><span class="nav-number">1.</span> <span class="nav-text">Background</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#System-Assumptions-and-Requirements"><span class="nav-number">1.1.</span> <span class="nav-text">System Assumptions and Requirements</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Service-Level-Agreements-SLA"><span class="nav-number">1.2.</span> <span class="nav-text">Service Level Agreements (SLA)</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Design-Considerations"><span class="nav-number">1.3.</span> <span class="nav-text">Design Considerations</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Related-Work"><span class="nav-number">2.</span> <span class="nav-text">Related Work</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#System-Architecture"><span class="nav-number">3.</span> <span class="nav-text">System Architecture</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#System-Interface"><span class="nav-number">3.1.</span> <span class="nav-text">System Interface</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Partitioning-Algorithm"><span class="nav-number">3.2.</span> <span class="nav-text">Partitioning Algorithm</span></a></li></ol></li></ol></div>
+              <div class="post-toc-content"><ol class="nav"><li class="nav-item nav-level-1"><a class="nav-link" href="#Background"><span class="nav-number">1.</span> <span class="nav-text">Background</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#System-Assumptions-and-Requirements"><span class="nav-number">1.1.</span> <span class="nav-text">System Assumptions and Requirements</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Service-Level-Agreements-SLA"><span class="nav-number">1.2.</span> <span class="nav-text">Service Level Agreements (SLA)</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Design-Considerations"><span class="nav-number">1.3.</span> <span class="nav-text">Design Considerations</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Related-Work"><span class="nav-number">2.</span> <span class="nav-text">Related Work</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#System-Architecture"><span class="nav-number">3.</span> <span class="nav-text">System Architecture</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#System-Interface"><span class="nav-number">3.1.</span> <span class="nav-text">System Interface</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Partitioning-Algorithm"><span class="nav-number">3.2.</span> <span class="nav-text">Partitioning Algorithm</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Replication"><span class="nav-number">3.3.</span> <span class="nav-text">Replication</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Data-Versioning"><span class="nav-number">3.4.</span> <span class="nav-text">Data Versioning</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Execution-of-get-and-put-Operations"><span class="nav-number">3.5.</span> <span class="nav-text">Execution of get() and put() Operations</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Handling-Failures-Hinted-Handoff"><span class="nav-number">3.6.</span> <span class="nav-text">Handling Failures: Hinted Handoff</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Handling-Permanet-Failures-Replica-Synchronization"><span class="nav-number">3.7.</span> <span class="nav-text">Handling Permanet Failures: Replica Synchronization</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Membership-and-Failure-Detection"><span class="nav-number">3.8.</span> <span class="nav-text">Membership and Failure Detection</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Adding-Removing-Storage-Nodes"><span class="nav-number">3.9.</span> <span class="nav-text">Adding/Removing Storage Nodes</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Implementation"><span class="nav-number">4.</span> <span class="nav-text">Implementation</span></a></li></ol></div>
             
 
           </div>
