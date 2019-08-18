@@ -103,7 +103,8 @@
 <meta property="og:description" content="这篇博客，分享另一个云端巨头：Amazon的DynamoDB数据库的实现论文，“Dynamo: Amazon’s Highly Available Key-value Store”。这也是整个专题的第三篇。">
 <meta property="og:locale" content="zh-CN">
 <meta property="og:image" content="https://hotlinkqiu-blog.oss-cn-shenzhen.aliyuncs.com/dynamo/dynamo_techniques.PNG">
-<meta property="og:updated_time" content="2019-08-13T00:33:25.660Z">
+<meta property="og:image" content="https://hotlinkqiu-blog.oss-cn-shenzhen.aliyuncs.com/dynamo/dynamo_partitioning.PNG">
+<meta property="og:updated_time" content="2019-08-18T02:48:21.479Z">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="分布式存储研究——DynamoDB">
 <meta name="twitter:description" content="这篇博客，分享另一个云端巨头：Amazon的DynamoDB数据库的实现论文，“Dynamo: Amazon’s Highly Available Key-value Store”。这也是整个专题的第三篇。">
@@ -382,7 +383,7 @@
                 
                   <span class="post-meta-item-text">更新于</span>
                 
-                <time title="修改时间：2019-08-13 08:33:25" itemprop="dateModified" datetime="2019-08-13T08:33:25+08:00">2019-08-13</time>
+                <time title="修改时间：2019-08-18 10:48:21" itemprop="dateModified" datetime="2019-08-18T10:48:21+08:00">2019-08-18</time>
               </span>
             
           
@@ -502,7 +503,55 @@
 </ul>
 <h2 id="Adding-Removing-Storage-Nodes"><a href="#Adding-Removing-Storage-Nodes" class="headerlink" title="Adding/Removing Storage Nodes"></a>Adding/Removing Storage Nodes</h2><p>当一个节点被加入到环中时，它就会被随机分配到一系列的token，表示它所承担的存储的key。此时有一批节点就不再需要储存这些key的信息，从而将这些数据传输到新增节点上来。而当节点退出系统时，会实施一个逆过程，将退出节点上的数据重新传输到新计算负责的节点上去。</p>
 <p>Dyanmo的实际操作经验表明，这种方法将负载均匀地平摊到各个节点，从而降低延迟，提高效率。另外，通过在起始和目标节点之间加入一个确认回路，可以保证不会收到重复的数据传输。</p>
-<h1 id="Implementation"><a href="#Implementation" class="headerlink" title="Implementation"></a>Implementation</h1>
+<h1 id="Implementation"><a href="#Implementation" class="headerlink" title="Implementation"></a>Implementation</h1><p>Dynamo中，每个存储节点都有三个关键的软件组成部分：</p>
+<ul>
+<li>request coordination：使用状态机处理节点接收到的请求（存储N份数据节点的第一个节点进行请求处理），包括将请求发往数据存储的各个节点并收集响应等。系统还会对写请求做一些优化，例如通常写请求紧跟在读请求后，那么响应写请求的节点就协调为前一次读请求响应最快的节点。</li>
+<li>membership and failure detection</li>
+<li>local persistence engine：使用插件的方式，允许应用根据自己的数据量来选择本地持久化引擎，包括BDB Transactional Data Store，BDB Java Edition，MySQL，内存buffer。</li>
+</ul>
+<h1 id="Experiences-amp-Lessons-Learned"><a href="#Experiences-amp-Lessons-Learned" class="headerlink" title="Experiences &amp; Lessons Learned"></a>Experiences &amp; Lessons Learned</h1><p>不同的应用会使用不同配置的Dynamo，最主要的差别在版本协调逻辑，和读写仲裁节点数量。有以下几个主要模式：</p>
+<ul>
+<li>Business logic specific reconciliation：基于特定业务逻辑的版本协调逻辑，例如之前举例的购物车应用，需要按照业务来merge或使用其它处理方式处理不同版本的数据结果。</li>
+<li>Timestamp based reconciliation：与前一点的主要区别在于版本协调逻辑，使用简单的时间戳比较，“last write wins”，后修改的生效。例如用户的session信息。</li>
+<li>High performance read engine：一些特定场景下，读多写很少，为提高效率，修改R=1，W=N。例如权限管理缓存等。</li>
+</ul>
+<p>Dynamo的N，R，W可以随意调节，通常N值设置为3。不少应用的(N,R,W)值设置为(3,2,2)。</p>
+<h2 id="Balancing-Performance-and-Durability"><a href="#Balancing-Performance-and-Durability" class="headerlink" title="Balancing Performance and Durability"></a>Balancing Performance and Durability</h2><p>Dynamo的TP999为300ms。由于硬件系统的I/O性能一般，以及服务性能取决于最差的那台机器，提供一致高性能的服务不是一件简单的工作。</p>
+<p>在一次为期30天（2006年12月）的实验中，服务延迟出现了很明显的每日波动，每天白天请求多，延迟高，夜间请求少，延迟低。同时写请求的延时要高于读请求。TP999在200ms左右。这一结果已经符合预期，但一些系统对性能要求更高，那么就会牺牲一些持久性：在节点中开辟一个内存buffer，所有写请求操作buffer，并通过一个线程定时写到磁盘。读请求也先检查buffer中有没有，没有在读存储引擎。这种方法，即使内存空间很小（容纳一千个对象），也可以成功地将最大延迟从200ms降低到100ms以下。但缺点也显而易见：一旦机器宕机，就会丢失掉buffer中未处理的写请求。那此时的进一步优化就是在多个写的分片中，指定一个进行持久化的写，其它分片写到buffer，保证数据不丢失。同时因为写请求时只需要W个节点响应，W&lt;N时也能享受buffer带来的性能提升。</p>
+<h2 id="Ensuring-Uniform-Load-Distribution"><a href="#Ensuring-Uniform-Load-Distribution" class="headerlink" title="Ensuring Uniform Load Distribution"></a>Ensuring Uniform Load Distribution</h2><p>Dynamo的负载均衡策略是在不断演进的，分为三个阶段：</p>
+<p><img src="https://hotlinkqiu-blog.oss-cn-shenzhen.aliyuncs.com/dynamo/dynamo_partitioning.PNG" alt="Dynamo的分片和放置策略"></p>
+<ol>
+<li>T random tokens per node and partition by node value：也就是之前介绍的策略。每个节点T个随机token。token是hash空间中的随机值，两个连续token定义了一个range，由于token是随机选取的，它们所代表的range大小可能不同。这个策略的根本问题是数据分片和分片放置的位置纠缠在了一起，具体表现为几个问题：</li>
+</ol>
+<ul>
+<li>当一个节点加入时，它需要从其它节点偷来它自己的key range。此时老节点就需要扫描自己的存储，取出合适的数据进行传递。这是比价影响性能的操作，为了保证用户体验，启动一个节点的时间就会变得很漫长（繁忙时需要一天）</li>
+<li>当节点加入/离开时，其它节点的key range就会改变，Merkle tree需要重新计算。</li>
+<li>这种策略下，key range的随机性导致无法轻松地对整个key space进行snapshot。</li>
+</ul>
+<ol start="2">
+<li>T random tokens per node and equal sized partitions：这个策略将hash空间分为Q个大小相等的部分，每个节点被分配到T个随机的token。设置Q &gt;&gt; N且Q &gt;&gt; S*T（S是系统节点数量）。token只是用来创建value和hash空间的映射函数，不决定分割。一个分片被放置在一致性哈希环中遇到的前N个不同节点上。这一策略的好处是：</li>
+</ol>
+<ul>
+<li>解耦了数据分片和分片放置的位置。</li>
+<li>允许在运行时动态改变放置位置。</li>
+</ul>
+<ol start="3">
+<li>Q/S tokens per node, equal-sized partitions：第三种策略同样解耦了分片和放置的位置。每个节点被分配到Q/S个token。当节点退出时，它的token被随机分布到剩余的节点。节点加入时，就从其它节点偷来自己的token。它有以下好处：</li>
+</ol>
+<ul>
+<li>Faster bootstrapping/recovery：当partition range修复了之后，它们会被存在独立的文件中，一个分片的恢复只需要将对应的文件传输即可，避免了去定位特定的item。</li>
+<li>Ease of archival：此时分片文件可以独立的进行归档。</li>
+</ul>
+<h2 id="Divergent-Versions-When-and-How-Many"><a href="#Divergent-Versions-When-and-How-Many" class="headerlink" title="Divergent Versions: When and How Many?"></a>Divergent Versions: When and How Many?</h2><p>判断系统一致性错误的一个有效度量方式是观察应用获取到的，版本有分歧的数据数量。版本分歧通常有两种场景：一是系统中节点宕机，二是系统处理大规模的并发写。</p>
+<p>在观察购物车应用的一次24h实验中，99.94%的请求只有1个version，0.00057%有2个version，0.00047%有3个，0.00009%有4个。（实验数据有些对不上100%？）。观察到的主要原因是并发写入，通常触发者是一些自动机器人而非人。</p>
+<h2 id="Client-driven-or-Server-driven-Coordination"><a href="#Client-driven-or-Server-driven-Coordination" class="headerlink" title="Client-driven or Server-driven Coordination"></a>Client-driven or Server-driven Coordination</h2><p>之前提到Dynamo的数据节点有一个coordination component通过状态机来处理请求。另一种可行的策略是将状态机移到Client端。client定期（经验值是10s）向Dynamo获取节点的membership状态，用这个来直接访问特定的节点。因为数据基本平均地分配在各个节点，也不需要做额外的负载均衡。实验中TP999的优化效果很明显。主要优化点是减少了不必要的负载均衡和随机分配节点后，节点再向数据对应节点发送请求的一跳。</p>
+<h2 id="Balancing-Background-vs-Foreground-Tasks"><a href="#Balancing-Background-vs-Foreground-Tasks" class="headerlink" title="Balancing Background vs. Foreground Tasks"></a>Balancing Background vs. Foreground Tasks</h2><p>一些后台操作的执行需要保证前台put/get请求的用户体验不受影响。因此Dynamo将所有的后台操作统一集成到一个控制机制中。该controller会去收集前台操作的一些性能指标，以此判断此时是否能将时间片分配给后台请求。</p>
+<h1 id="Conclusions"><a href="#Conclusions" class="headerlink" title="Conclusions"></a>Conclusions</h1><p>读这篇文章我最大的收获是两点：</p>
+<ol>
+<li>技术上关于一致性哈希的了解，最突出的就是Dynamo数据分片和数据放置位置的策略演进。</li>
+<li>对于理念上的更新：Dynamo将它的目标设置为不拒绝任何写请求，而在读请求时处理冲突，这是一种反向的思维，区别于我们平时希望数据写时尽可能一致，能够进行快速读取。这一点值得学习。</li>
+</ol>
+
       
     </div>
 
@@ -726,7 +775,7 @@
             
 
             
-              <div class="post-toc-content"><ol class="nav"><li class="nav-item nav-level-1"><a class="nav-link" href="#Background"><span class="nav-number">1.</span> <span class="nav-text">Background</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#System-Assumptions-and-Requirements"><span class="nav-number">1.1.</span> <span class="nav-text">System Assumptions and Requirements</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Service-Level-Agreements-SLA"><span class="nav-number">1.2.</span> <span class="nav-text">Service Level Agreements (SLA)</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Design-Considerations"><span class="nav-number">1.3.</span> <span class="nav-text">Design Considerations</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Related-Work"><span class="nav-number">2.</span> <span class="nav-text">Related Work</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#System-Architecture"><span class="nav-number">3.</span> <span class="nav-text">System Architecture</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#System-Interface"><span class="nav-number">3.1.</span> <span class="nav-text">System Interface</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Partitioning-Algorithm"><span class="nav-number">3.2.</span> <span class="nav-text">Partitioning Algorithm</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Replication"><span class="nav-number">3.3.</span> <span class="nav-text">Replication</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Data-Versioning"><span class="nav-number">3.4.</span> <span class="nav-text">Data Versioning</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Execution-of-get-and-put-Operations"><span class="nav-number">3.5.</span> <span class="nav-text">Execution of get() and put() Operations</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Handling-Failures-Hinted-Handoff"><span class="nav-number">3.6.</span> <span class="nav-text">Handling Failures: Hinted Handoff</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Handling-Permanet-Failures-Replica-Synchronization"><span class="nav-number">3.7.</span> <span class="nav-text">Handling Permanet Failures: Replica Synchronization</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Membership-and-Failure-Detection"><span class="nav-number">3.8.</span> <span class="nav-text">Membership and Failure Detection</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Adding-Removing-Storage-Nodes"><span class="nav-number">3.9.</span> <span class="nav-text">Adding/Removing Storage Nodes</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Implementation"><span class="nav-number">4.</span> <span class="nav-text">Implementation</span></a></li></ol></div>
+              <div class="post-toc-content"><ol class="nav"><li class="nav-item nav-level-1"><a class="nav-link" href="#Background"><span class="nav-number">1.</span> <span class="nav-text">Background</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#System-Assumptions-and-Requirements"><span class="nav-number">1.1.</span> <span class="nav-text">System Assumptions and Requirements</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Service-Level-Agreements-SLA"><span class="nav-number">1.2.</span> <span class="nav-text">Service Level Agreements (SLA)</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Design-Considerations"><span class="nav-number">1.3.</span> <span class="nav-text">Design Considerations</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Related-Work"><span class="nav-number">2.</span> <span class="nav-text">Related Work</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#System-Architecture"><span class="nav-number">3.</span> <span class="nav-text">System Architecture</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#System-Interface"><span class="nav-number">3.1.</span> <span class="nav-text">System Interface</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Partitioning-Algorithm"><span class="nav-number">3.2.</span> <span class="nav-text">Partitioning Algorithm</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Replication"><span class="nav-number">3.3.</span> <span class="nav-text">Replication</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Data-Versioning"><span class="nav-number">3.4.</span> <span class="nav-text">Data Versioning</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Execution-of-get-and-put-Operations"><span class="nav-number">3.5.</span> <span class="nav-text">Execution of get() and put() Operations</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Handling-Failures-Hinted-Handoff"><span class="nav-number">3.6.</span> <span class="nav-text">Handling Failures: Hinted Handoff</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Handling-Permanet-Failures-Replica-Synchronization"><span class="nav-number">3.7.</span> <span class="nav-text">Handling Permanet Failures: Replica Synchronization</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Membership-and-Failure-Detection"><span class="nav-number">3.8.</span> <span class="nav-text">Membership and Failure Detection</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Adding-Removing-Storage-Nodes"><span class="nav-number">3.9.</span> <span class="nav-text">Adding/Removing Storage Nodes</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Implementation"><span class="nav-number">4.</span> <span class="nav-text">Implementation</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Experiences-amp-Lessons-Learned"><span class="nav-number">5.</span> <span class="nav-text">Experiences &amp; Lessons Learned</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#Balancing-Performance-and-Durability"><span class="nav-number">5.1.</span> <span class="nav-text">Balancing Performance and Durability</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Ensuring-Uniform-Load-Distribution"><span class="nav-number">5.2.</span> <span class="nav-text">Ensuring Uniform Load Distribution</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Divergent-Versions-When-and-How-Many"><span class="nav-number">5.3.</span> <span class="nav-text">Divergent Versions: When and How Many?</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Client-driven-or-Server-driven-Coordination"><span class="nav-number">5.4.</span> <span class="nav-text">Client-driven or Server-driven Coordination</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Balancing-Background-vs-Foreground-Tasks"><span class="nav-number">5.5.</span> <span class="nav-text">Balancing Background vs. Foreground Tasks</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Conclusions"><span class="nav-number">6.</span> <span class="nav-text">Conclusions</span></a></li></ol></div>
             
 
           </div>
