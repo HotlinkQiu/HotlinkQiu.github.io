@@ -104,7 +104,7 @@
 <meta property="og:locale" content="zh-CN">
 <meta property="og:image" content="https://hotlinkqiu-blog.oss-cn-shenzhen.aliyuncs.com/gfs/gfs_architecture.PNG">
 <meta property="og:image" content="https://hotlinkqiu-blog.oss-cn-shenzhen.aliyuncs.com/gfs/gfs_data_flow.PNG">
-<meta property="og:updated_time" content="2019-07-27T03:40:49.717Z">
+<meta property="og:updated_time" content="2019-09-11T08:58:21.699Z">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="分布式存储研究——GFS">
 <meta name="twitter:description" content="为了在分布式系统的技术栈中有更深的认识和更坚实的基础，准备在这个季度（2019年三季度）花费工作外的时间对Google和Amazon一系列分布式数据的论文进行研读学习，并将研读结果整理为博客记录。 本篇研读的论文是The Google File System，发表于2003年的SOSP，介绍了Google的GFS文件存储系统。">
@@ -383,7 +383,7 @@
                 
                   <span class="post-meta-item-text">更新于</span>
                 
-                <time title="修改时间：2019-07-27 11:40:49" itemprop="dateModified" datetime="2019-07-27T11:40:49+08:00">2019-07-27</time>
+                <time title="修改时间：2019-09-11 16:58:21" itemprop="dateModified" datetime="2019-09-11T16:58:21+08:00">2019-09-11</time>
               </span>
             
           
@@ -553,6 +553,52 @@
 <li>作为一个分布式存储系统，GFS使用了一个Master节点来居中调度。这看起来没有那种纯粹的数学美感，似乎不能显示出系统设计者的水平。但是，这一方案却是实用而且廉价的。相比于单节点的问题，它带来了更多的收益。况且带有主节点的分布式集群同样能展现摒除了复杂算法的简洁美。</li>
 <li>一个方案应该解决一类具体的问题。我们可以提前“优化”，可以考虑一个放之四海而皆准的框架，但是这个世界上能解决一类具体问题的方案就已经是一个好方案了。GFS的设计处处针对着Google的具体应用。定位精准的同时，保留了一定的扩展性。大一统理论还是留给爱因斯坦吧。</li>
 </ul>
+<h1 id="Six-Questions"><a href="#Six-Questions" class="headerlink" title="Six Questions"></a>Six Questions</h1><ul>
+<li>这个技术出现的背景、初衷和要达到什么样的目标或是要解决什么样的问题。</li>
+</ul>
+<p>GFS是脱胎于Google公司内部的一个分布式文件系统。它的设计重点就是契合于Google内部的一系列文件存储的需求，而谷歌的数据最大的特点是数据量非常之大。其他需求还包括支持高可用，支持高并发等。</p>
+<ul>
+<li>这个技术的优势和劣势分别是什么，或者说，这个技术的trade-off是什么。</li>
+</ul>
+<p>相比于在GFS之前的分布式文件系统，我认为GFS的最大优势是其允许将整个系统构建在廉价的服务器之上。据吴军博士的介绍，GFS加上MapReduce技术，使得Google得以“用大量的廉价服务器来代替超级计算机，而前者的价格不到后者的1/5，这也使得Google的运营成本比微软和雅虎低得多”。在当时“太阳公司的CEO麦克尼利嘲笑Google这种廉价的服务器集群是‘3M胶带纸’粘起来的。但是就是这些‘3M胶带纸粘起来的’廉价服务器让生产高大上服务器的太阳公司关了门”。</p>
+<p>而GFS最大的劣势，一是其严格限制了使用场景。因为它的很多设计和优化都是根据使用场景来进行的，那么这个文件系统就失去了通用性。最大的限制就是对读写场景的限制：顺序读，顺序写。另外其设计使得只有在上规模的系统中才能充分展现其优势，否则呈现的更多是其复杂的设计，包括复杂的流程设计和调度，以及其中对文件进行分片，存储索引信息等引起的空间浪费。</p>
+<p>另外还有一些小的trade-off，例如使用中心的master节点代替纯分布式设计，使用可能的master单点瓶颈交换了纯分布式系统设计的复杂性。</p>
+<ul>
+<li>这个技术使用的场景。</li>
+</ul>
+<p>GFS本质上是一个分布式文件系统。论文的Assumption环节已经详细阐述了GFS的使用场景，这里我再用自己的语言整理一下：</p>
+<ol>
+<li>低成本的硬件：系统构建于一批廉价硬件之上，其良好的高可用性就是针对这一点进行设计。 </li>
+<li>大文件存储：一般的文件大小会达到100MB级别，总的文件数量在M级别。因此像视频流分片之类的存储就不适用。这类文件可能需要在上层的业务逻辑中进行整合。</li>
+<li>流式读取：GFS最喜欢的读操作还是流式读取一整个大文件，而非随机读取，也只支持小规模的随机读取。</li>
+<li>顺序写入：于流式读取相对应，GFS最喜欢不断地进行Append写，写入后很少进行修改。</li>
+<li>支持高并发：这一点是GFS自身的原子操作设计实现的。</li>
+<li>支持持续高带宽，而非低延时：GFS本质上还是一个文件存储系统，本质上作文件传输是其最主要的使命。又由于其上存储大文件的特性，持续保持高带宽更为重要。</li>
+</ol>
+<ul>
+<li>技术的组成部分和关键点。</li>
+</ul>
+<p>GFS最主要的组成部分就是两部分的实现：GFS master和GFS chunkserver。</p>
+<ul>
+<li>技术的底层原理和关键实现。</li>
+</ul>
+<p>GFS底层实际上是通过软件控制的方式使用磁盘来进行备份，实现其高可用性，单纯的磁盘相较于磁盘阵列要更加简单，也更加便宜。其中最主要的关键实现就是数据流的控制和数据一致性的保证。</p>
+<ul>
+<li>已有的实现和它之间的对比。</li>
+</ul>
+<p>根据论文的Related Work描述，GFS的主要比较者有：AFS，xFS，Swift，Frangipani，Intermezzo，Minnesota’s GFS，GPFS，Lustre，NASD等。</p>
+<p>与这些系统相比：</p>
+<ol>
+<li>GFS类似AFS提供了与位置无关的命名空间</li>
+<li>GFS数据流的过程更像xFS和Swift，不像AFS。</li>
+<li>GFS只使用磁盘做备份，不像xFS和Swift需要使用复杂的RAID（磁盘阵列）</li>
+<li>与AFS，xFS，Frangipani，Intermezzo相比，GFS不做缓存，因为它的使用场景是流式读取，跑一次一般整个文件只读一遍</li>
+<li>GFS有一个中心master服务器，而Frangipani，xFS，Minnesota’s GFS和GPFS是纯依赖于分布式算法的系统。</li>
+<li>与Lustre相同，GFS没有实现POSIX文件系统。</li>
+<li>GFS与NASD的架构很相像，不过GFS基于普通的chunkserver机器，使用固定大小的chunk，同时比NASD实现了更多功能，例如重平衡，快照，数据恢复等，更适用于生产环境。</li>
+<li>与Minnesota’s GFS和NASD相比，GFS不支持修改存储设备的模型。</li>
+<li>在数据传输队列中，与River相比，River使用内存队列，支持m-n的分布式队列，但不保证高可用性。GFS只支持m-1的队列，但实现起来高效可靠。</li>
+</ol>
 
       
     </div>
@@ -779,7 +825,7 @@
             
 
             
-              <div class="post-toc-content"><ol class="nav"><li class="nav-item nav-level-1"><a class="nav-link" href="#Design-Overview"><span class="nav-number">1.</span> <span class="nav-text">Design Overview</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#Assumptions"><span class="nav-number">1.1.</span> <span class="nav-text">Assumptions</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Architecture"><span class="nav-number">1.2.</span> <span class="nav-text">Architecture</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Single-Master"><span class="nav-number">1.3.</span> <span class="nav-text">Single Master</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Chunk"><span class="nav-number">1.4.</span> <span class="nav-text">Chunk</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Metadata"><span class="nav-number">1.5.</span> <span class="nav-text">Metadata</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Consistency-Model"><span class="nav-number">1.6.</span> <span class="nav-text">Consistency Model</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#System-Interactions"><span class="nav-number">2.</span> <span class="nav-text">System Interactions</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#Data-Flow"><span class="nav-number">2.1.</span> <span class="nav-text">Data Flow</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Atomic-Record-Appends"><span class="nav-number">2.2.</span> <span class="nav-text">Atomic Record Appends</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Snapshot"><span class="nav-number">2.3.</span> <span class="nav-text">Snapshot</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Master-Operations"><span class="nav-number">3.</span> <span class="nav-text">Master Operations</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#Namespace"><span class="nav-number">3.1.</span> <span class="nav-text">Namespace</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Chunk-Replica"><span class="nav-number">3.2.</span> <span class="nav-text">Chunk Replica</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Garbage-Collection"><span class="nav-number">3.3.</span> <span class="nav-text">Garbage Collection</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Fail-Tolerance-and-Diagnosis"><span class="nav-number">4.</span> <span class="nav-text">Fail Tolerance and Diagnosis</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Measurements"><span class="nav-number">5.</span> <span class="nav-text">Measurements</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Conclusion"><span class="nav-number">6.</span> <span class="nav-text">Conclusion</span></a></li></ol></div>
+              <div class="post-toc-content"><ol class="nav"><li class="nav-item nav-level-1"><a class="nav-link" href="#Design-Overview"><span class="nav-number">1.</span> <span class="nav-text">Design Overview</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#Assumptions"><span class="nav-number">1.1.</span> <span class="nav-text">Assumptions</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Architecture"><span class="nav-number">1.2.</span> <span class="nav-text">Architecture</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Single-Master"><span class="nav-number">1.3.</span> <span class="nav-text">Single Master</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Chunk"><span class="nav-number">1.4.</span> <span class="nav-text">Chunk</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Metadata"><span class="nav-number">1.5.</span> <span class="nav-text">Metadata</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Consistency-Model"><span class="nav-number">1.6.</span> <span class="nav-text">Consistency Model</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#System-Interactions"><span class="nav-number">2.</span> <span class="nav-text">System Interactions</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#Data-Flow"><span class="nav-number">2.1.</span> <span class="nav-text">Data Flow</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Atomic-Record-Appends"><span class="nav-number">2.2.</span> <span class="nav-text">Atomic Record Appends</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Snapshot"><span class="nav-number">2.3.</span> <span class="nav-text">Snapshot</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Master-Operations"><span class="nav-number">3.</span> <span class="nav-text">Master Operations</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#Namespace"><span class="nav-number">3.1.</span> <span class="nav-text">Namespace</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Chunk-Replica"><span class="nav-number">3.2.</span> <span class="nav-text">Chunk Replica</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Garbage-Collection"><span class="nav-number">3.3.</span> <span class="nav-text">Garbage Collection</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Fail-Tolerance-and-Diagnosis"><span class="nav-number">4.</span> <span class="nav-text">Fail Tolerance and Diagnosis</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Measurements"><span class="nav-number">5.</span> <span class="nav-text">Measurements</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Conclusion"><span class="nav-number">6.</span> <span class="nav-text">Conclusion</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Six-Questions"><span class="nav-number">7.</span> <span class="nav-text">Six Questions</span></a></li></ol></div>
             
 
           </div>
