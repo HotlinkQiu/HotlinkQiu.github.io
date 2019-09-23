@@ -106,7 +106,7 @@
 <meta property="og:image" content="https://hotlinkqiu-blog.oss-cn-shenzhen.aliyuncs.com/aurora/aurora_aurora_io.PNG">
 <meta property="og:image" content="https://hotlinkqiu-blog.oss-cn-shenzhen.aliyuncs.com/aurora/aurora_aurora_io.PNG">
 <meta property="og:image" content="https://hotlinkqiu-blog.oss-cn-shenzhen.aliyuncs.com/aurora/aurora_architecture.PNG">
-<meta property="og:updated_time" content="2019-08-25T02:43:14.445Z">
+<meta property="og:updated_time" content="2019-09-23T01:48:56.273Z">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="分布式存储研究——Aurora">
 <meta name="twitter:description" content="分布式存储研究计划的最后一篇论文，研读Amazon的Aurora数据库。其对应论文为：Amazon Aurora: Design Considerations for High Throughput Cloud-Native Relational Databases。论文发表于2017数据库顶会SIGMOD。键值对数据库，Amazon提出了Dynamo，而关系型数据库，Amazon推出了Auror">
@@ -385,7 +385,7 @@
                 
                   <span class="post-meta-item-text">更新于</span>
                 
-                <time title="修改时间：2019-08-25 10:43:14" itemprop="dateModified" datetime="2019-08-25T10:43:14+08:00">2019-08-25</time>
+                <time title="修改时间：2019-09-23 09:48:56" itemprop="dateModified" datetime="2019-09-23T09:48:56+08:00">2019-09-23</time>
               </span>
             
           
@@ -450,7 +450,7 @@
 <h2 id="Durability-at-Scale"><a href="#Durability-at-Scale" class="headerlink" title="Durability at Scale"></a>Durability at Scale</h2><p>为了保障大规模集群下的耐久性，Aurora主要有两项措施：使用一个仲裁模型（quorum model）以及分段存储。</p>
 <p>仲裁模型，我们已经比较熟悉了，对于V个副本的数据，R + W &gt; V即可保证一致性。在之前的Dynamo论文中也有提到。一个典型的取值是(V,R,W)=(3,2,2)。但Aurora认为这还不够。一个简单的例子是，将数据的三个副本分别放在三个可用区（AWS的AZ概念，在同一个地区相邻的三个数据节点），如果同时一个可用区发生了大规模故障，而另一个可用区里的一台服务器发生了偶然故障，那么仲裁模型将不再有效。</p>
 <p>为了保障(a)即便整个可用区加一台其它可用区服务器发生故障，系统不会丢失数据，以及(b)一整个可用区故障后仍能进行写数据，Aurora的参数设置为(V,R,W)=(6,3,4)，每个可用区会有两个数据副本。可以看到(a)情况下，3个副本发生故障，不影响读操作，数据不丢失。而(b)情况下，2个副本故障，不会影响写操作。</p>
-<h2 id="Segmented-Storage"><a href="#Segmented-Storage" class="headerlink" title="Segmented Storage"></a>Segmented Storage</h2><p>故障恢复有两个概念：MTTF（Mean Time to Failure，平均故障发生时间）和MTTR（Meat Time to Repair，平均故障修复时间）。如果希望系统能够抵御故障，那么需要MTTF &gt; MTTR，在故障修复期中尽可能没有新的故障发生。MTTF很难优化，Aurora专注于降低MTTR，策略也很直观：将数据分段为10GB的Segment，每份会在3个可用区中有i一共6个副本，数据存储在带有SSD的EC2上（亚马逊的虚拟服务器）。那么Segment就是系统探测失效和修复的最小单元。10GB的分段数据在10Gbps的网络连接上只需要10s就能传输完毕，在这个窗口内1个可用区失效，外加另外可用区中两个副本同时失效的概率非常非常低。</p>
+<h2 id="Segmented-Storage"><a href="#Segmented-Storage" class="headerlink" title="Segmented Storage"></a>Segmented Storage</h2><p>故障恢复有两个概念：MTTF（Mean Time to Failure，平均故障发生时间）和MTTR（Meat Time to Repair，平均故障修复时间）。如果希望系统能够抵御故障，那么需要MTTF &gt; MTTR，在故障修复期中尽可能没有新的故障发生。MTTF很难优化，Aurora专注于降低MTTR，策略也很直观：将数据分段为10GB的Segment，每份会在3个可用区中有一共6个副本，数据存储在带有SSD的EC2上（亚马逊的虚拟服务器）。那么Segment就是系统探测失效和修复的最小单元。10GB的分段数据在10Gbps的网络连接上只需要10s就能传输完毕，在这个窗口内1个可用区失效，外加另外可用区中两个副本同时失效的概率非常非常低。</p>
 <h2 id="Operational-Advantages-of-Resilience"><a href="#Operational-Advantages-of-Resilience" class="headerlink" title="Operational Advantages of Resilience"></a>Operational Advantages of Resilience</h2><p>由于整个Aurora的设计针对故障保证了高可用性，那么利用这个高可用性也可以做很多运维操作。例如回滚一次错误的部署；标记过热的节点为已损坏，由系统重新将其数据分配到冷节点中去；以及停止节点为其打上系统和安全补丁。其中，打补丁时，会一个个可用区依次进行，同一时间一份数据只会有一个副本所在节点进行打补丁操作。</p>
 <h1 id="The-Log-is-The-Database"><a href="#The-Log-is-The-Database" class="headerlink" title="The Log is The Database"></a>The Log is The Database</h1><h2 id="The-Burden-of-Amplified-Writes"><a href="#The-Burden-of-Amplified-Writes" class="headerlink" title="The Burden of Amplified Writes"></a>The Burden of Amplified Writes</h2><p>Aurora在提供了强大的高可用性背后，实际放大了整个数据库读写的操作。例如一个MySQL的写操作需要写4次，在写的过程中，实际上分为了很多类的数据，包括redo log、binaray log（会被同步归档在S3中来支持实时restore）、修改的数据页、临时的double-write以及FRM元数据。所有数据都会在节点间传播和写入数据库。被放大了的网络负载如图：</p>
 <p><img src="https://hotlinkqiu-blog.oss-cn-shenzhen.aliyuncs.com/aurora/aurora_mirrored_mysql_io.PNG" alt="原MySQL负载"></p>
@@ -505,25 +505,81 @@
 </ol>
 <p>在真实客户场景下Aurora的性能也得到了很好的证实。</p>
 <h1 id="Lessons-Learned"><a href="#Lessons-Learned" class="headerlink" title="Lessons Learned"></a>Lessons Learned</h1><ul>
-<li>Multi-tenancy and Database Consolidation：许多客户的服务会面临多租户的场景，他们原有的应用不容易拆分，那么简单的方法就是为每个租户维持一张表，并把所有租户的表放到数据库中去。这和类似于Salesforce使用多租户数据结构，并把所有用户数据封装到一个表里的行为不一样。这种场景下，需要考虑一下几个方面，Aurora都非常适合。</li>
+<li>Multi-tenancy and Database Consolidation：许多客户的服务会面临多租户的场景，他们原有的应用不容易拆分，那么简单的方法就是为每个租户维持一张表，并把所有租户的表放到数据库中去。这和类似于Salesforce使用多租户数据结构，并把所有用户数据封装到一个表里的行为不一样。这种场景下，需要考虑以下几个方面，Aurora都非常适合：</li>
 </ul>
-<ul>
+<ol>
 <li>能够维持高并发</li>
 <li>能够按用量动态调整数据库大小</li>
 <li>能够尽量控制多租户数据之间的互相影响。</li>
-</ul>
+</ol>
 <ul>
 <li>High Concurrent Auto-scaling Workloads：Aurora可以很好地处理访问尖峰问题。</li>
 <li>Schema Evolution：在使用数据库时，开发人员可以很轻松地改变schema，而DBA就需要处理这些schema演化（实际上我没有类似的经历，不能很好地想象这种场景）。Aurora提供了两种机制：</li>
 </ul>
-<ul>
+<ol>
 <li>对各个版本的schema历史做记录，在解析时按需使用对应的schema。 </li>
 <li>使用写时修改为最新Schema的机制，对每个独立的页进行“懒”升级。</li>
-</ul>
+</ol>
 <ul>
 <li>Availability and Software Upgrades：线上应用基本不能接受数据库的停机升级。Aurora发布了一种零停机滚动升级的方式。具体来说，这个机制先找到一台不再处理事务的实例，将程序的临时状态存储到本地，为数据库打补丁，然后重新加载应用状态。</li>
 </ul>
 <p>另一个我觉得解读地很好的博客：<a href="https://www.cnblogs.com/cchust/p/7476876.html" target="_blank" rel="noopener">Amazon Aurora解读</a></p>
+<h1 id="Six-Questions"><a href="#Six-Questions" class="headerlink" title="Six Questions"></a>Six Questions</h1><p><strong>这个技术出现的背景、初衷和要达到什么样的目标或是要解决什么样的问题。</strong></p>
+<p>Amazon已经有了DynamoDB这个强大的NoSQL数据库，与之相对应的是一个在线事务处理（On-line Transaction Processing）的关系型数据库Aurora。它的出现源于Amazon的一个观点：在云端大规模集群中，传统的OLTP数据库已经不能保证可用性和持久性。Aurora将传统数据库中的存储和计算分离，在这种分离架构下，关系型数据库的主要瓶颈已经从数据处理和存储的转为了网络传输。因此Aurora的许多设计和优化都是针对此而来：构建一个简单的框架来解决大型数据库中的网络传输瓶颈。</p>
+<p><strong>这个技术的优势和劣势分别是什么，或者说，这个技术的trade-off是什么。</strong></p>
+<p>Aurora的优势在于，它改变了传统关系型数据库的读写框架，使其适用于弹性伸缩的云端，获得了可用性和持久性，同时降低了网络传输，使得整个系统响应低延时。上云之后，还有更多的优点，例如按需伸缩，多租户共享基础设施降低成本，故障能够快速恢复等。为此它继承了社区版MySQL的一些弱点，比如不能执行复杂的查询，单点写，写水平扩展需要依赖其它中间件方案。同时目前最大支持64TB的数据量。</p>
+<p><strong>这个技术使用的场景。</strong></p>
+<p>Aurora适用于部署在云端弹性伸缩，读多写少，要求高并发低延时高可用性，处理事务的关系型数据库场景。</p>
+<p><strong>技术的组成部分和关键点。</strong></p>
+<p>Aurora本质上是将社区版的MySQL进行了重新架构，将计算和存储分离。其关键的组成部分是经过修改的“Aurora MySQL”，配合使用AWS RDS进行元数据管理，并将数据存储到底层的磁盘和S3等存储服务中。</p>
+<p><strong>技术的底层原理和关键实现。</strong></p>
+<p>Aurora的底层引擎依旧是社区版MySQL，其做的最主要的改进是剥离计算和存储，简化网络传输，在网络传输中只传递redo log。另外就是使用Quorum模型来保证高可用，使用分段存储来保证快速地从故障中恢复。</p>
+<p><strong>已有的实现和它之间的对比。</strong></p>
+<p>论文本身没有Related Work。根据之前推荐的博客，其一个比较对象就是Google的MySQL数据库Spanner：</p>
+<table>
+<thead>
+<tr>
+<th>比较项</th>
+<th>Spanner</th>
+<th>Aurora</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>架构</td>
+<td>Shared Nothing</td>
+<td>Shared Disk</td>
+</tr>
+<tr>
+<td>弹性</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>持续可用</td>
+<td>Paxos-based</td>
+<td>Quorum-based</td>
+</tr>
+<tr>
+<td>写扩展</td>
+<td>Yes</td>
+<td>No</td>
+</tr>
+<tr>
+<td>分库分表透明</td>
+<td>Yes</td>
+<td>No</td>
+</tr>
+<tr>
+<td>分布式事务</td>
+<td>Yes</td>
+<td>No</td>
+</tr>
+<tr>
+<td>MySQL/Postgres兼容</td>
+<td>No</td>
+<td>Yes</td>
+</tr>
+</tbody></table>
 
       
     </div>
@@ -756,7 +812,7 @@
             
 
             
-              <div class="post-toc-content"><ol class="nav"><li class="nav-item nav-level-1"><a class="nav-link" href="#Introduction"><span class="nav-number">1.</span> <span class="nav-text">Introduction</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#Durability-at-Scale"><span class="nav-number">1.1.</span> <span class="nav-text">Durability at Scale</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Segmented-Storage"><span class="nav-number">1.2.</span> <span class="nav-text">Segmented Storage</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Operational-Advantages-of-Resilience"><span class="nav-number">1.3.</span> <span class="nav-text">Operational Advantages of Resilience</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#The-Log-is-The-Database"><span class="nav-number">2.</span> <span class="nav-text">The Log is The Database</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#The-Burden-of-Amplified-Writes"><span class="nav-number">2.1.</span> <span class="nav-text">The Burden of Amplified Writes</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Offloading-Redo-Processing-to-Storage"><span class="nav-number">2.2.</span> <span class="nav-text">Offloading Redo Processing to Storage</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Storage-Service-Design-Points"><span class="nav-number">2.3.</span> <span class="nav-text">Storage Service Design Points</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#The-Log-Marches-Forward"><span class="nav-number">3.</span> <span class="nav-text">The Log Marches Forward</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#Solution-Sketch-Asynchronous-Processing"><span class="nav-number">3.1.</span> <span class="nav-text">Solution Sketch: Asynchronous Processing</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Normal-Operation"><span class="nav-number">3.2.</span> <span class="nav-text">Normal Operation</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Recovery"><span class="nav-number">3.3.</span> <span class="nav-text">Recovery</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Putting-It-All-Together"><span class="nav-number">4.</span> <span class="nav-text">Putting It All Together</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Performance-Results"><span class="nav-number">5.</span> <span class="nav-text">Performance Results</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Lessons-Learned"><span class="nav-number">6.</span> <span class="nav-text">Lessons Learned</span></a></li></ol></div>
+              <div class="post-toc-content"><ol class="nav"><li class="nav-item nav-level-1"><a class="nav-link" href="#Introduction"><span class="nav-number">1.</span> <span class="nav-text">Introduction</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#Durability-at-Scale"><span class="nav-number">1.1.</span> <span class="nav-text">Durability at Scale</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Segmented-Storage"><span class="nav-number">1.2.</span> <span class="nav-text">Segmented Storage</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Operational-Advantages-of-Resilience"><span class="nav-number">1.3.</span> <span class="nav-text">Operational Advantages of Resilience</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#The-Log-is-The-Database"><span class="nav-number">2.</span> <span class="nav-text">The Log is The Database</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#The-Burden-of-Amplified-Writes"><span class="nav-number">2.1.</span> <span class="nav-text">The Burden of Amplified Writes</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Offloading-Redo-Processing-to-Storage"><span class="nav-number">2.2.</span> <span class="nav-text">Offloading Redo Processing to Storage</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Storage-Service-Design-Points"><span class="nav-number">2.3.</span> <span class="nav-text">Storage Service Design Points</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#The-Log-Marches-Forward"><span class="nav-number">3.</span> <span class="nav-text">The Log Marches Forward</span></a><ol class="nav-child"><li class="nav-item nav-level-2"><a class="nav-link" href="#Solution-Sketch-Asynchronous-Processing"><span class="nav-number">3.1.</span> <span class="nav-text">Solution Sketch: Asynchronous Processing</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Normal-Operation"><span class="nav-number">3.2.</span> <span class="nav-text">Normal Operation</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#Recovery"><span class="nav-number">3.3.</span> <span class="nav-text">Recovery</span></a></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Putting-It-All-Together"><span class="nav-number">4.</span> <span class="nav-text">Putting It All Together</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Performance-Results"><span class="nav-number">5.</span> <span class="nav-text">Performance Results</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Lessons-Learned"><span class="nav-number">6.</span> <span class="nav-text">Lessons Learned</span></a></li><li class="nav-item nav-level-1"><a class="nav-link" href="#Six-Questions"><span class="nav-number">7.</span> <span class="nav-text">Six Questions</span></a></li></ol></div>
             
 
           </div>
