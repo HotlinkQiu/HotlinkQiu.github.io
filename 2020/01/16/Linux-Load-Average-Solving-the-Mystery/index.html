@@ -408,6 +408,18 @@
           
             
             
+              
+              <span class="post-meta-item">
+                <span class="post-meta-item-icon">
+                  <i class="fa fa-comment-o"></i>
+                </span>
+            
+                <span class="post-meta-item-text">评论数：</span>
+                <a href="/2020/01/16/Linux-Load-Average-Solving-the-Mystery/#comments" itemprop="discussionUrl">
+                  <span class="post-comments-count valine-comment-count" data-xid="/2020/01/16/Linux-Load-Average-Solving-the-Mystery/" itemprop="commentCount"></span>
+                </a>
+              </span>
+            
           
 
           
@@ -441,7 +453,7 @@
 <p>以下为原文翻译：</p>
 <p>Load Average（以下译为平均负载）是工程中一个很重要的指标，我的公司使用该指标以及一些其它指标维持着数以百万计的云端实例进行自动扩容。但围绕着这个Linux指标一直以来都有一些谜团，比如这个指标不仅追踪正在运行的任务，也追踪处于uninterruptible sleep状态（通常是在等待IO）的任务。这到底是为什么呢？我之前从来没有找到过任何解释。因此这篇文章我将解决这个谜题，对平均负载指标做一些总结，供所有尝试理解这一指标的人作为参考。</p>
 <p>Linux的平均负载指标，也即“system load average”，指的是系统一段时间内需要执行的线程（任务），也即正在运行加正在等待的线程数的平均数。这个指标度量的是系统需要处理的任务量，可以大于系统实际正在处理的线程数。大部分工具会展示1分钟，5分钟和15分钟的平均值。</p>
-<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">$</span> uptime</span><br><span class="line"> 16:48:24 up  4:11,  1 user,  load average: 25.25, 23.40, 23.46</span><br><span class="line"></span><br><span class="line">top - 16:48:42 up  4:12,  1 user,  load average: 25.25, 23.14, 23.37</span><br><span class="line"></span><br><span class="line"><span class="meta">$</span> cat /proc/loadavg </span><br><span class="line">25.72 23.19 23.35 42/3411 43603</span><br></pre></td></tr></table></figure>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">$</span><span class="bash"> uptime</span></span><br><span class="line"> 16:48:24 up  4:11,  1 user,  load average: 25.25, 23.40, 23.46</span><br><span class="line"></span><br><span class="line">top - 16:48:42 up  4:12,  1 user,  load average: 25.25, 23.14, 23.37</span><br><span class="line"></span><br><span class="line"><span class="meta">$</span><span class="bash"> cat /proc/loadavg </span></span><br><span class="line">25.72 23.19 23.35 42/3411 43603</span><br></pre></td></tr></table></figure>
 
 <p>简单做一些解释：</p>
 <ul>
@@ -504,7 +516,7 @@
 
 <p>如果你不熟悉Off-CPU火焰图：每一列是一个任务的完整塔形栈，它们组成了火焰的样子。你可以点击每个框来放大观察完整的栈。x轴大小与任务花费在off-CPU上的时间成正比，而从左到右的排序没有什么实际含义。off-CPU栈的颜色我使用蓝色（在on-CPU图上我使用暖色），颜色的饱和度是随机生成的，用以区分不同的框。</p>
 <p>我使用我在<a href="https://github.com/iovisor/bcc" target="_blank" rel="noopener">bcc</a>工程下的offcputime工具来生成这张图，指令如下：</p>
-<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#</span> ./bcc/tools/offcputime.py -K --state 2 -f 60 &gt; out.stacks</span><br><span class="line"><span class="meta">#</span> awk '&#123; print $1, $2 / 1000 &#125;' out.stacks | ./FlameGraph/flamegraph.pl --color=io --countname=ms &gt; out.offcpu.svgb&gt;</span><br></pre></td></tr></table></figure>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#</span><span class="bash"> ./bcc/tools/offcputime.py -K --state 2 -f 60 &gt; out.stacks</span></span><br><span class="line"><span class="meta">#</span><span class="bash"> awk <span class="string">'&#123; print $1, $2 / 1000 &#125;'</span> out.stacks | ./FlameGraph/flamegraph.pl --color=io --countname=ms &gt; out.offcpu.svgb&gt;</span></span><br></pre></td></tr></table></figure>
 
 <p>awk命令将微秒输出为毫秒，–state 2表示TASK_UNINTERRUPTIBLE（参见sched.h文件），是我为这篇文章添加的一个可选参数。第一次这么做的人是Facebook的Josef Bacik，使用他的<a href="https://github.com/josefbacik/kernelscope" target="_blank" rel="noopener">kernelscope</a>工具，这个工具也使用了bcc和火焰图。在我的例子中，我只展示了内核栈，而offcputime.py也支持展示用户栈。</p>
 <p>这幅图显示，在60s中uninterruptible睡眠只花费了926ms，这只让我们的平均负载增加了0.015。这些时间大部分花在cgroup相关代码上，disk I/O并没有花太多时间。</p>
@@ -517,7 +529,7 @@
 <p>这是一段使用TASK_UNINTERRUPTIBLE获取锁的代码。Linux对于互斥锁的获取有可中断和不可中断的实现方式（例如mutex_lock()和mutex_lock_interruptible()，以及对信号量的down()和down_interruptible()），可中断版本允许任务被信号中断，唤醒后继续处理。处在不可中断的锁中睡眠的时间通常不会对平均负载造成很大的影响。但在这个例子中，这类任务增加了0.30的平均负载。如果这个值再大一些，就值得分析是否有必要减少锁的竞争来优化性能，降低平均负载（例如我将开始研究systemd-journal和proc_pid_cmdline_read()）。</p>
 <p>那么这些代码路径应该被包含在平均负载统计中吗？我认为应该。这些线程处在执行过程中，然后被锁阻塞。它们并不是空闲的，它们对系统有需要，尽管需求的是软件资源而非硬件资源。</p>
 <h1 id="分拆Linux-Load-Averages"><a href="#分拆Linux-Load-Averages" class="headerlink" title="分拆Linux Load Averages"></a>分拆Linux Load Averages</h1><p>那么Linux平均负载能否被完全拆成几个部件呢？下面是一个例子：在一台空闲的有8个CPU的系统上，我调用tar来打包一些未缓存的文件。这个过程会花费几分钟，大部分时间被阻塞在读磁盘上。下面是从三个终端窗口搜集的数据：</p>
-<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">terma$</span> pidstat -p `pgrep -x tar` 60</span><br><span class="line">Linux 4.9.0-rc5-virtual (bgregg-xenial-bpf-i-0b7296777a2585be1)     08/01/2017  _x86_64_    (8 CPU)</span><br><span class="line"></span><br><span class="line">10:15:51 PM   UID       PID    %usr %system  %guest    %CPU   CPU  Command</span><br><span class="line">10:16:51 PM     0     18468    2.85   29.77    0.00   32.62     3  tar</span><br><span class="line"></span><br><span class="line"><span class="meta">termb$</span> iostat -x 60</span><br><span class="line">[...]</span><br><span class="line">avg-cpu:  %user   %nice %system %iowait  %steal   %idle</span><br><span class="line">           0.54    0.00    4.03    8.24    0.09   87.10</span><br><span class="line"></span><br><span class="line">Device:         rrqm/s   wrqm/s     r/s     w/s    rkB/s    wkB/s avgrq-sz avgqu-sz   await r_await w_await  svctm  %util</span><br><span class="line">xvdap1            0.00     0.05   30.83    0.18   638.33     0.93    41.22     0.06    1.84    1.83    3.64   0.39   1.21</span><br><span class="line">xvdb            958.18  1333.83 2045.30  499.38 60965.27 63721.67    98.00     3.97    1.56    0.31    6.67   0.24  60.47</span><br><span class="line">xvdc            957.63  1333.78 2054.55  499.38 61018.87 63722.13    97.69     4.21    1.65    0.33    7.08   0.24  61.65</span><br><span class="line">md0               0.00     0.00 4383.73 1991.63 121984.13 127443.80    78.25     0.00    0.00    0.00    0.00   0.00   0.00</span><br><span class="line"></span><br><span class="line"><span class="meta">termc$</span> uptime</span><br><span class="line"> 22:15:50 up 154 days, 23:20,  5 users,  load average: 1.25, 1.19, 1.05</span><br><span class="line">[...]</span><br><span class="line"><span class="meta">termc$</span> uptime</span><br><span class="line"> 22:17:14 up 154 days, 23:21,  5 users,  load average: 1.19, 1.17, 1.06</span><br></pre></td></tr></table></figure>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">terma$</span><span class="bash"> pidstat -p `pgrep -x tar` 60</span></span><br><span class="line">Linux 4.9.0-rc5-virtual (bgregg-xenial-bpf-i-0b7296777a2585be1)     08/01/2017  _x86_64_    (8 CPU)</span><br><span class="line"></span><br><span class="line">10:15:51 PM   UID       PID    %usr %system  %guest    %CPU   CPU  Command</span><br><span class="line">10:16:51 PM     0     18468    2.85   29.77    0.00   32.62     3  tar</span><br><span class="line"></span><br><span class="line"><span class="meta">termb$</span><span class="bash"> iostat -x 60</span></span><br><span class="line">[...]</span><br><span class="line">avg-cpu:  %user   %nice %system %iowait  %steal   %idle</span><br><span class="line">           0.54    0.00    4.03    8.24    0.09   87.10</span><br><span class="line"></span><br><span class="line">Device:         rrqm/s   wrqm/s     r/s     w/s    rkB/s    wkB/s avgrq-sz avgqu-sz   await r_await w_await  svctm  %util</span><br><span class="line">xvdap1            0.00     0.05   30.83    0.18   638.33     0.93    41.22     0.06    1.84    1.83    3.64   0.39   1.21</span><br><span class="line">xvdb            958.18  1333.83 2045.30  499.38 60965.27 63721.67    98.00     3.97    1.56    0.31    6.67   0.24  60.47</span><br><span class="line">xvdc            957.63  1333.78 2054.55  499.38 61018.87 63722.13    97.69     4.21    1.65    0.33    7.08   0.24  61.65</span><br><span class="line">md0               0.00     0.00 4383.73 1991.63 121984.13 127443.80    78.25     0.00    0.00    0.00    0.00   0.00   0.00</span><br><span class="line"></span><br><span class="line"><span class="meta">termc$</span><span class="bash"> uptime</span></span><br><span class="line"> 22:15:50 up 154 days, 23:20,  5 users,  load average: 1.25, 1.19, 1.05</span><br><span class="line">[...]</span><br><span class="line"><span class="meta">termc$</span><span class="bash"> uptime</span></span><br><span class="line"> 22:17:14 up 154 days, 23:21,  5 users,  load average: 1.19, 1.17, 1.06</span><br></pre></td></tr></table></figure>
 
 <p>我也同样为不可中断状态的任务搜集了Off-CPU火焰图：</p>
 <embed src="http://www.brendangregg.com/blog/images/2017/out.offcputime_unint08.svg">
@@ -558,7 +570,7 @@
 </ul>
 <p>前两个指标评估的是利用率，后三个是饱和度指标。利用率指标用来描述工作负载，而饱和度指标则用来鉴别性能问题。表示CPU饱和度的最佳指标是run queue（或者scheduler）latency：任务或线程处在可运行状态但需要等待运行的时间。这些指标可以帮助你度量性能问题的严重程度，例如一个任务处在等待时间的百分比。度量run queue的长度也可以发现问题，不过难以度量严重程度。</p>
 <p>schedstats组件在Linux 4.6中被设置成了内核可调整，并且改为了默认关闭。<a href="https://github.com/uber-common/cpustat" target="_blank" rel="noopener">cpustat</a>的延迟统计同样统计了scheduler latency指标，我也刚刚建议把它加到<a href="https://github.com/hishamhm/htop/issues/665" target="_blank" rel="noopener">htop</a>中去，这样可以大大简化大家的使用，要比从/proc/sched_debug的输出中抓取等待时间指标简单。</p>
-<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">$</span> awk 'NF &gt; 7 &#123; if ($1 == "task") &#123; if (h == 0) &#123; print; h=1 &#125; &#125; else &#123; print &#125; &#125;' /proc/sched_debug</span><br><span class="line">            task   PID         tree-key  switches  prio     wait-time             sum-exec        sum-sleep</span><br><span class="line">         systemd     1      5028.684564    306666   120        43.133899     48840.448980   2106893.162610 0 0 /init.scope</span><br><span class="line">     ksoftirqd/0     3 99071232057.573051   1109494   120         5.682347     21846.967164   2096704.183312 0 0 /</span><br><span class="line">    kworker/0:0H     5 99062732253.878471         9   100         0.014976         0.037737         0.000000 0 0 /</span><br><span class="line">     migration/0     9         0.000000   1995690     0         0.000000     25020.580993         0.000000 0 0 /</span><br><span class="line">   lru-add-drain    10        28.548203         2   100         0.000000         0.002620         0.000000 0 0 /</span><br><span class="line">      watchdog/0    11         0.000000   3368570     0         0.000000     23989.957382         0.000000 0 0 /</span><br><span class="line">         cpuhp/0    12      1216.569504         6   120         0.000000         0.010958         0.000000 0 0 /</span><br><span class="line">          xenbus    58  72026342.961752       343   120         0.000000         1.471102         0.000000 0 0 /</span><br><span class="line">      khungtaskd    59 99071124375.968195    111514   120         0.048912      5708.875023   2054143.190593 0 0 /</span><br><span class="line">[...]</span><br><span class="line">         dockerd 16014    247832.821522   2020884   120        95.016057    131987.990617   2298828.078531 0 0 /system.slice/docker.service</span><br><span class="line">         dockerd 16015    106611.777737   2961407   120         0.000000    160704.014444         0.000000 0 0 /system.slice/docker.service</span><br><span class="line">         dockerd 16024       101.600644        16   120         0.000000         0.915798         0.000000 0 0 /system.slice/</span><br><span class="line">[...]</span><br></pre></td></tr></table></figure>
+<figure class="highlight shell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">$</span><span class="bash"> awk <span class="string">'NF &gt; 7 &#123; if ($1 == "task") &#123; if (h == 0) &#123; print; h=1 &#125; &#125; else &#123; print &#125; &#125;'</span> /proc/sched_debug</span></span><br><span class="line">            task   PID         tree-key  switches  prio     wait-time             sum-exec        sum-sleep</span><br><span class="line">         systemd     1      5028.684564    306666   120        43.133899     48840.448980   2106893.162610 0 0 /init.scope</span><br><span class="line">     ksoftirqd/0     3 99071232057.573051   1109494   120         5.682347     21846.967164   2096704.183312 0 0 /</span><br><span class="line">    kworker/0:0H     5 99062732253.878471         9   100         0.014976         0.037737         0.000000 0 0 /</span><br><span class="line">     migration/0     9         0.000000   1995690     0         0.000000     25020.580993         0.000000 0 0 /</span><br><span class="line">   lru-add-drain    10        28.548203         2   100         0.000000         0.002620         0.000000 0 0 /</span><br><span class="line">      watchdog/0    11         0.000000   3368570     0         0.000000     23989.957382         0.000000 0 0 /</span><br><span class="line">         cpuhp/0    12      1216.569504         6   120         0.000000         0.010958         0.000000 0 0 /</span><br><span class="line">          xenbus    58  72026342.961752       343   120         0.000000         1.471102         0.000000 0 0 /</span><br><span class="line">      khungtaskd    59 99071124375.968195    111514   120         0.048912      5708.875023   2054143.190593 0 0 /</span><br><span class="line">[...]</span><br><span class="line">         dockerd 16014    247832.821522   2020884   120        95.016057    131987.990617   2298828.078531 0 0 /system.slice/docker.service</span><br><span class="line">         dockerd 16015    106611.777737   2961407   120         0.000000    160704.014444         0.000000 0 0 /system.slice/docker.service</span><br><span class="line">         dockerd 16024       101.600644        16   120         0.000000         0.915798         0.000000 0 0 /system.slice/</span><br><span class="line">[...]</span><br></pre></td></tr></table></figure>
 
 <p>除了CPU指标，你也可以找到度量磁盘设备使用率和饱和度的指标。我主要使用<a href="http://www.brendangregg.com/usemethod.html" target="_blank" rel="noopener">USE method</a>中的指标，并且会参考它们的<a href="http://www.brendangregg.com/USEmethod/use-linux.html" target="_blank" rel="noopener">Linux Checklist</a>。</p>
 <p>尽管有很多更加具体的指标，但这并不意味着平均负载指标没用。平均负载配合其它指标可以成功应用在云计算微服务的自动扩容策略中，能够帮助微服务应对CPU、磁盘等不同原因造成的负载上升。有了自动扩容策略，即使造成了错误的扩容（烧钱）也比不扩容（影响用户）要安全，因此人们会倾向于在自动扩容中加入更多的信号。如果某次自动扩容扩了太多，我们也能够到第二天进行debug。</p>
@@ -644,6 +656,10 @@
 
           </div>
           
+
+  
+    <div class="comments" id="comments">
+    </div>
 
   
 
@@ -969,6 +985,32 @@
   
 
   
+  
+
+<script src="//unpkg.com/valine/dist/Valine.min.js"></script>
+
+<script>
+  var GUEST = ['nick', 'mail', 'link'];
+  var guest = 'nick,mail,link';
+  guest = guest.split(',').filter(function(item) {
+    return GUEST.indexOf(item) > -1;
+  });
+  new Valine({
+    el: '#comments',
+    verify: false,
+    notify: false,
+    appId: 'UwSMLdtCzwFaLQPxcNuknpi8-gzGzoHsz',
+    appKey: '4vxUGhTXYRmTdn209nlEiBz5',
+    placeholder: 'Just go go',
+    avatar: 'mm',
+    meta: guest,
+    pageSize: '10' || 10,
+    visitor: false,
+    lang: '' || 'zh-cn'
+  });
+</script>
+
+
 
 
   
